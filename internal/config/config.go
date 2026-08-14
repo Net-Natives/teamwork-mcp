@@ -117,6 +117,29 @@ func Load(logOutput io.Writer, profiles ...string) (Resources, func()) {
 		}),
 		twapi.WithMiddleware(func(next twapi.HTTPClient) twapi.HTTPClient {
 			return twapi.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+				// Re-encode the credential as basic auth when running in API key
+				// mode. The Projects API accepts an API key only as the username of
+				// a basic credential and answers 401 for the same key sent as a
+				// bearer token.
+				//
+				// This is a header rewrite rather than a different session because
+				// the SDK offers exactly one per-request session — BearerTokenContext
+				// — and it hardcodes the Bearer scheme. Engine.ExecuteRaw calls
+				// Session.Authenticate before handing the request to this client, so
+				// the Authorization header already exists by the time we run and
+				// SetBasicAuth replaces it. The session is still doing useful work:
+				// it resolves the request's scheme and host from the customer URL,
+				// which BearerTokenContext.Server() cannot supply.
+				if resources.Info.AuthMode == AuthModeAPIKey {
+					if apiKey, ok := BearerTokenFromContext(req.Context()); ok && apiKey != "" {
+						req.SetBasicAuth(apiKey, "x")
+					}
+				}
+				return next.Do(req)
+			})
+		}),
+		twapi.WithMiddleware(func(next twapi.HTTPClient) twapi.HTTPClient {
+			return twapi.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 				if haProxyURL != nil && !isCrossRegion(req.Context()) {
 					// use internal HAProxy address to avoid extra hops
 					req.Header.Set("Host", req.URL.Host)

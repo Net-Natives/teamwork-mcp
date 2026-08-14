@@ -49,6 +49,18 @@ type Resources struct {
 		// BearerToken is the bearer token to be used to authenticate with Teamwork
 		// API. This is useful for the MCP server in STDIO mode.
 		BearerToken string
+		// AuthMode selects how an incoming credential is validated and how the
+		// Teamwork API session is built. "oauth" (the default) treats it as an
+		// OAuth bearer token resolved via Launchpad; "apikey" treats it as a
+		// Teamwork Projects API key resolved via basic auth. See
+		// internal/auth/apikey_info.go for why the two cannot share a path.
+		AuthMode string
+		// SiteURL is the customer's own Teamwork installation, such as
+		// "https://example.teamwork.com". Required when AuthMode is "apikey":
+		// that path resolves the credential against /projects/api/v3/me.json,
+		// which returns no installation URL, so unlike the OAuth path there is
+		// nothing to discover the host from. Ignored when AuthMode is "oauth".
+		SiteURL string
 		// Log contains the logging configuration.
 		Log struct {
 			// Format is the format of the logs. It can be "json" or "text".
@@ -91,6 +103,8 @@ func newResources(profiles ...string) Resources {
 	resources.Info.APIURL = strings.TrimSuffix(getEnv("TW_MCP_API_URL", "https://teamwork.com"), "/")
 	resources.Info.HAProxyURL = getEnv("TW_MCP_HAPROXY_URL", "")
 	resources.Info.BearerToken = getEnv("TW_MCP_BEARER_TOKEN", "")
+	resources.Info.AuthMode = strings.ToLower(getEnv("TW_MCP_AUTH_MODE", AuthModeOAuth))
+	resources.Info.SiteURL = strings.TrimSuffix(getEnv("TW_MCP_SITE_URL", ""), "/")
 	resources.Info.Log.Format = strings.ToLower(getEnv("TW_MCP_LOG_FORMAT", "text"))
 	resources.Info.Log.Level = strings.ToLower(getEnv("TW_MCP_LOG_LEVEL", "info"))
 	resources.Info.Log.SentryDSN = getEnv("TW_MCP_SENTRY_DSN", "")

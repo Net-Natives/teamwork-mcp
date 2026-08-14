@@ -107,6 +107,58 @@ The server can be configured using the following environment variables:
 | `TW_MCP_URL` | The base URL for the MCP server | `https://mcp.ai.teamwork.com` |
 | `TW_MCP_API_URL` | The Teamwork API base URL | `https://teamwork.com` |
 
+### Authentication Configuration
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `TW_MCP_AUTH_MODE` | How an incoming credential is validated: `oauth` or `apikey` | `oauth` | `apikey` |
+| `TW_MCP_SITE_URL` | The Teamwork installation to authenticate against. **Required when `TW_MCP_AUTH_MODE=apikey`**, ignored otherwise | _(empty)_ | `https://example.teamwork.com` |
+
+#### `oauth` (default)
+
+The credential in `Authorization: Bearer` is treated as an OAuth access token and
+validated against Teamwork's Launchpad identity service. Scopes come from the
+token, so the tool list is filtered to the products it was granted. A rejected
+token gets an [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728)
+re-authorisation challenge, prompting the client to run the OAuth flow again.
+
+#### `apikey`
+
+The credential in `Authorization: Bearer` is treated as a Teamwork **Projects API
+key** and validated with HTTP basic auth against
+`$TW_MCP_SITE_URL/projects/api/v3/me.json`. Use this mode when OAuth is not
+available or not wanted:
+
+- **Installations without Launchpad** cannot authenticate in `oauth` mode at all —
+  Launchpad answers `401` for every credential, however it is presented.
+- **API keys do not expire.** Teamwork's authorization server advertises only the
+  `authorization_code` grant and issues no refresh token, so an `oauth`
+  deployment re-authorises the user (and re-does MFA) whenever the client
+  discards its token.
+
+Three behaviours differ from `oauth` mode, all of them consequences of what an
+API key is rather than choices:
+
+- **Only `twprojects` tools are advertised.** An API key authenticates against the
+  Projects API only; Desk and Spaces reject it. The server reports a `projects`
+  scope so tools whose every call would return `401` are never offered.
+- **`TW_MCP_SITE_URL` is required and validated at startup.** `me.json` returns no
+  installation URL, so unlike an OAuth token the host cannot be discovered from
+  the credential. A region-hosted installation (`*.eu.teamwork.com`) makes the
+  global default actively wrong.
+- **No re-authorisation challenge is sent.** The `WWW-Authenticate` header points
+  at an OAuth flow that an API key deployment has no part in, so a rejected key
+  gets a plain `401`.
+
+```bash
+export TW_MCP_AUTH_MODE=apikey
+export TW_MCP_SITE_URL=https://example.teamwork.com
+go run ./cmd/mcp-http
+```
+
+Each user supplies their own key as the bearer credential, so one deployment
+serves the whole team with per-user permissions and no shared service account.
+
 ### Logging Configuration
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|

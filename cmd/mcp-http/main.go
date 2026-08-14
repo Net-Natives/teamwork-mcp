@@ -56,6 +56,16 @@ func main() {
 	resources, teardown := config.Load(os.Stdout, methods.Profiles()...)
 	defer teardown()
 
+	// Fail fast on an unusable auth configuration. In API key mode a missing site
+	// URL would otherwise make every request fail the same way a bad key does,
+	// which is near-impossible to diagnose from the client side.
+	if err := resources.ValidateAuthMode(); err != nil {
+		resources.Logger().Error("invalid authentication configuration",
+			slog.String("error", err.Error()),
+		)
+		exit(exitCodeSetupFailure)
+	}
+
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
@@ -483,9 +493,7 @@ func authMiddleware(resources config.Resources, next http.Handler) http.Handler 
 			bypass, err := auth.Bypass(content)
 			switch {
 			case err != nil, !bypass:
-				// https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-				w.Header().Set("WWW-Authenticate",
-					`Bearer resource_metadata="`+resources.Info.MCPURL+`/.well-known/oauth-protected-resource"`)
+				setReauthChallenge(w, resources)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			default:
 				r.Body = io.NopCloser(bytes.NewBuffer(content))
@@ -496,22 +504,18 @@ func authMiddleware(resources config.Resources, next http.Handler) http.Handler 
 
 		matches := reBearerToken.FindStringSubmatch(r.Header.Get("Authorization"))
 		if len(matches) < 2 {
-			// https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-			w.Header().Set("WWW-Authenticate",
-				`Bearer resource_metadata="`+resources.Info.MCPURL+`/.well-known/oauth-protected-resource"`)
+			setReauthChallenge(w, resources)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		bearerToken := matches[1]
 
-		info, err := auth.GetBearerInfo(r.Context(), resources, bearerToken)
+		info, err := authenticateCredential(r.Context(), resources, bearerToken)
 		switch {
 		case errors.Is(err, auth.ErrBearerInfoUnauthorized):
-			// The token was positively rejected, so challenge the client to
+			// The credential was positively rejected, so challenge the client to
 			// re-authorise.
-			// https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-			w.Header().Set("WWW-Authenticate",
-				`Bearer resource_metadata="`+resources.Info.MCPURL+`/.well-known/oauth-protected-resource"`)
+			setReauthChallenge(w, resources)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 
@@ -566,6 +570,41 @@ func authMiddleware(resources config.Resources, next http.Handler) http.Handler 
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// authenticateCredential resolves the credential from the Authorization header
+// into a BearerInfo, using whichever validation the configured auth mode
+// requires. Both paths return the same type and the same sentinel errors, so
+// everything downstream — logging, tracing, scopes, the session — is identical.
+func authenticateCredential(
+	ctx context.Context,
+	resources config.Resources,
+	credential string,
+) (*auth.BearerInfo, error) {
+	if resources.Info.AuthMode == config.AuthModeAPIKey {
+		return auth.GetAPIKeyInfo(ctx, resources, credential)
+	}
+	return auth.GetBearerInfo(ctx, resources, credential)
+}
+
+// setReauthChallenge adds the RFC 9728 re-authorisation challenge that makes an
+// OAuth client discard its token and run the authorization flow again.
+//
+// It is deliberately a no-op in API key mode. The challenge points the client at
+// this server's protected-resource metadata, which names Teamwork's authorization
+// server — a flow an API key deployment has no part in, and which an installation
+// without Launchpad cannot complete at all. Sending it there would invite a
+// client to abandon a perfectly good key and start an authorization flow that
+// cannot succeed, turning a fixable "wrong key" into an unrecoverable loop. A
+// bare 401 is the honest answer: the credential was refused, and no protocol
+// step will change that.
+func setReauthChallenge(w http.ResponseWriter, resources config.Resources) {
+	if resources.Info.AuthMode == config.AuthModeAPIKey {
+		return
+	}
+	// https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+	w.Header().Set("WWW-Authenticate",
+		`Bearer resource_metadata="`+resources.Info.MCPURL+`/.well-known/oauth-protected-resource"`)
 }
 
 type exitCode int
