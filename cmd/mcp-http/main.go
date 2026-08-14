@@ -44,6 +44,16 @@ func main() {
 	resources, teardown := config.Load(os.Stdout, config.WithProfiles(methods.Profiles()...))
 	defer teardown()
 
+	// Fail fast on an unusable auth configuration. In API key mode a missing site
+	// URL would otherwise make every request fail the same way a bad key does,
+	// which is near-impossible to diagnose from the client side.
+	if err := resources.ValidateAuthMode(); err != nil {
+		resources.Logger().Error("invalid authentication configuration",
+			slog.String("error", err.Error()),
+		)
+		exit(exitCodeSetupFailure)
+	}
+
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 

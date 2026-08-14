@@ -69,6 +69,18 @@ type Resources struct {
 		// BearerToken is the bearer token to be used to authenticate with Teamwork
 		// API. This is useful for the MCP server in STDIO mode.
 		BearerToken string
+		// AuthMode selects how an incoming credential is validated and how the
+		// Teamwork API session is built. "oauth" (the default) treats it as an
+		// OAuth bearer token resolved via Launchpad; "apikey" treats it as a
+		// Teamwork Projects API key resolved via basic auth. See
+		// pkg/auth/apikey_info.go for why the two cannot share a path.
+		AuthMode string
+		// SiteURL is the customer's own Teamwork installation, such as
+		// "https://example.teamwork.com". Required when AuthMode is "apikey":
+		// that path resolves the credential against /projects/api/v3/me.json,
+		// which returns no installation URL, so unlike the OAuth path there is
+		// nothing to discover the host from. Ignored when AuthMode is "oauth".
+		SiteURL string
 		// RestrictedInstallationIDs lists the installations whose tool responses
 		// carry no personal or otherwise sensitive data (RESTRICTED_INSTALLATION_IDS,
 		// comma-separated). See IsRestrictedInstallation.
@@ -185,6 +197,8 @@ func newResources(opts options) Resources {
 	resources.Info.APIURL = strings.TrimSuffix(env("API_URL", "https://teamwork.com"), "/")
 	resources.Info.HAProxyURL = env("HAPROXY_URL", "")
 	resources.Info.BearerToken = env("BEARER_TOKEN", "")
+	resources.Info.AuthMode = strings.ToLower(env("AUTH_MODE", AuthModeOAuth))
+	resources.Info.SiteURL = strings.TrimSuffix(env("SITE_URL", ""), "/")
 	resources.Info.RestrictedInstallationIDs, resources.invalidRestrictedInstallationIDs =
 		parseInstallationIDs(env("RESTRICTED_INSTALLATION_IDS", ""))
 	resources.Info.Log.Format = strings.ToLower(env("LOG_FORMAT", "text"))

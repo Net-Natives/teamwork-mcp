@@ -10,6 +10,7 @@ package mcphttp
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -98,7 +99,7 @@ func Auth(resources config.Resources, validator *auth.Validator, next http.Handl
 		}
 		bearerToken := matches[1]
 
-		info, err := validator.GetBearerInfo(r.Context(), bearerToken)
+		info, err := authenticateCredential(r.Context(), resources, validator, bearerToken)
 		switch {
 		case errors.Is(err, auth.ErrBearerInfoUnauthorized):
 			// The token was positively rejected, so challenge the client to
@@ -161,14 +162,39 @@ func Auth(resources config.Resources, validator *auth.Validator, next http.Handl
 	})
 }
 
+// authenticateCredential resolves the credential from the Authorization header
+// into a BearerInfo, using whichever validation the configured auth mode
+// requires. Both paths return the same type and the same sentinel errors, so
+// everything downstream — logging, tracing, scopes, the session — is identical.
+func authenticateCredential(
+	ctx context.Context,
+	resources config.Resources,
+	validator *auth.Validator,
+	credential string,
+) (*auth.BearerInfo, error) {
+	if resources.Info.AuthMode == config.AuthModeAPIKey {
+		return auth.GetAPIKeyInfo(ctx, resources, credential)
+	}
+	return validator.GetBearerInfo(ctx, credential)
+}
+
 // challenge answers 401 with the RFC 9728 pointer to this server's
 // protected-resource metadata, which is how a client learns where to authorise.
 // Only send it when the token was actually refused — it makes the client throw
 // its token away.
 //
+// In API key mode the pointer is deliberately left out and the 401 is bare. The
+// metadata names Teamwork's authorization server — a flow an API key deployment
+// has no part in, and which an installation without Launchpad cannot complete at
+// all. Sending it there would invite a client to abandon a perfectly good key and
+// start an authorization flow that cannot succeed, turning a fixable "wrong key"
+// into an unrecoverable loop.
+//
 // https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
 func challenge(w http.ResponseWriter, resources config.Resources) {
-	w.Header().Set("WWW-Authenticate",
-		`Bearer resource_metadata="`+ProtectedResourceURL(resources.Info.MCPURL)+`"`)
+	if resources.Info.AuthMode != config.AuthModeAPIKey {
+		w.Header().Set("WWW-Authenticate",
+			`Bearer resource_metadata="`+ProtectedResourceURL(resources.Info.MCPURL)+`"`)
+	}
 	http.Error(w, "Unauthorized", http.StatusUnauthorized)
 }
