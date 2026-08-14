@@ -502,13 +502,12 @@ func authMiddleware(resources config.Resources, next http.Handler) http.Handler 
 			return
 		}
 
-		matches := reBearerToken.FindStringSubmatch(r.Header.Get("Authorization"))
-		if len(matches) < 2 {
+		bearerToken, ok := extractCredential(resources, r.Header.Get("Authorization"))
+		if !ok {
 			setReauthChallenge(w, resources)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		bearerToken := matches[1]
 
 		info, err := authenticateCredential(r.Context(), resources, bearerToken)
 		switch {
@@ -570,6 +569,35 @@ func authMiddleware(resources config.Resources, next http.Handler) http.Handler 
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// extractCredential pulls the credential out of an Authorization header value.
+//
+// OAuth mode accepts only the "Bearer <token>" form, exactly as before: that is
+// what the MCP specification requires, and loosening it would change behaviour
+// for the deployment this server was written for.
+//
+// API key mode additionally accepts a bare value with no scheme, because the two
+// Claude surfaces that send a static credential disagree about who adds the
+// scheme. The Messages API takes mcp_servers[].authorization_token as a raw
+// token and sends "Authorization: Bearer <token>" itself, so the value must not
+// include the prefix. A claude.ai custom connector Request header is sent
+// verbatim — its documentation is explicit that Claude "does not add an
+// authentication scheme or any other prefix" — so there the value must include
+// it. The same key is therefore correct in one place and wrong in the other, and
+// getting it wrong produces a 401 indistinguishable from an invalid key.
+// Accepting both removes a whole class of unfixable-looking misconfiguration.
+//
+// A value containing a space is still rejected, so a genuinely different scheme
+// ("Basic dXNlcjpwYXNz") is never mistaken for a bare API key.
+func extractCredential(resources config.Resources, header string) (string, bool) {
+	if matches := reBearerToken.FindStringSubmatch(header); len(matches) >= 2 {
+		return matches[1], true
+	}
+	if resources.Info.AuthMode == config.AuthModeAPIKey && header != "" && !strings.Contains(header, " ") {
+		return header, true
+	}
+	return "", false
 }
 
 // authenticateCredential resolves the credential from the Authorization header
