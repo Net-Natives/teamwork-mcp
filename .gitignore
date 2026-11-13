@@ -63,3 +63,6 @@ Desktop.ini
 
 # AI file
 .claude/settings.local.json
+# macOS custom folder icons (filename is "Icon" + carriage return).
+# The doubled CR is intentional: git strips one trailing CR from each line.
+Icon
